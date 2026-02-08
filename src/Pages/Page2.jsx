@@ -34,6 +34,7 @@ function Page2() {
 
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
+  const streamedRef = useRef(null);
 
   const userId = localStorage.getItem("email");
 
@@ -75,6 +76,7 @@ const [dragPos, setDragPos] = useState(initialDragPos);
       });
       setStreamed(stream);
       setWebcamStream(stream);
+      streamedRef.current = stream;
       if (localVideoRef.current) localVideoRef.current.srcObject = stream;
     } catch (err) {
       console.error("Failed to get user media:", err);
@@ -82,22 +84,32 @@ const [dragPos, setDragPos] = useState(initialDragPos);
   };
 
   const switchCamera = async () => {
-    if (!streamed || screenSharing) return;
+    const currentStream = streamedRef.current || streamed;
+    if (!currentStream || screenSharing) return;
+    const newFacing = facingMode === "user" ? "environment" : "user";
     try {
-      const newFacing = facingMode === "user" ? "environment" : "user";
+      // Stop current camera first so the other camera can be acquired (required on most devices)
+      currentStream.getTracks().forEach((track) => track.stop());
+      streamedRef.current = null;
+    } catch (e) {
+      console.warn("Error stopping tracks:", e);
+    }
+    try {
       const newStream = await navigator.mediaDevices.getUserMedia({
         video: {
           width: { ideal: 1920 },
           height: { ideal: 1080 },
           frameRate: { ideal: 60, max: 100 },
-          facingMode: newFacing,
+          facingMode: { ideal: newFacing },
         },
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
-      streamed.getTracks().forEach((track) => track.stop());
+      streamedRef.current = newStream;
       setStreamed(newStream);
       setWebcamStream(newStream);
-      if (localVideoRef.current) localVideoRef.current.srcObject = newStream;
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = newStream;
+      }
       const videoTrack = newStream.getVideoTracks()[0];
       if (peer) {
         const sender = peer.getSenders().find((s) => s.track?.kind === "video");
@@ -106,6 +118,19 @@ const [dragPos, setDragPos] = useState(initialDragPos);
       setFacingMode(newFacing);
     } catch (err) {
       console.error("Camera switch failed:", err);
+      // Restore previous camera if switch failed (e.g. no back camera on desktop)
+      try {
+        const fallback = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 1920 }, height: { ideal: 1080 }, facingMode: { ideal: facingMode } },
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        });
+        streamedRef.current = fallback;
+        setStreamed(fallback);
+        setWebcamStream(fallback);
+        if (localVideoRef.current) localVideoRef.current.srcObject = fallback;
+      } catch (e2) {
+        console.error("Could not restore camera:", e2);
+      }
     }
   };
 
