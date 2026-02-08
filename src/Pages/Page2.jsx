@@ -3,7 +3,7 @@ import { Usesocket } from "../Provider/Socket";
 import { Usepeer } from "../Provider/Peer";
 import { Sun, Moon } from "lucide-react";
 import { PiVideoCameraDuotone, PiVideoCameraSlashDuotone } from "react-icons/pi";
-import { MdCastConnected, MdScreenShare, MdOutlineStopScreenShare, MdCallEnd } from "react-icons/md";
+import { MdCastConnected, MdScreenShare, MdOutlineStopScreenShare, MdCallEnd, MdCameraswitch } from "react-icons/md";
 import { IoVolumeMute } from "react-icons/io5";
 import { VscUnmute } from "react-icons/vsc";
  import { BsRecordBtn } from "react-icons/bs";
@@ -21,6 +21,7 @@ function Page2() {
   });
   const [cameraOn, setCameraOn] = useState(true);
   const [micOn, setMicOn] = useState(true);
+  const [facingMode, setFacingMode] = useState("user"); // "user" = front, "environment" = back
   const [screenSharing, setScreenSharing] = useState(false);
   const [webcamStream, setWebcamStream] = useState(null);
   const [messages, setMessages] = useState([]);
@@ -59,10 +60,17 @@ const [dragPos, setDragPos] = useState(initialDragPos);
     setTheme(newTheme);
   };
 
+  const getVideoConstraints = () => ({
+    width: { ideal: 1920 },
+    height: { ideal: 1080 },
+    frameRate: { ideal: 60, max: 100 },
+    facingMode: facingMode,
+  });
+
   const getUserMedia = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 60 , max : 100} },
+        video: getVideoConstraints(),
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
       setStreamed(stream);
@@ -70,6 +78,34 @@ const [dragPos, setDragPos] = useState(initialDragPos);
       if (localVideoRef.current) localVideoRef.current.srcObject = stream;
     } catch (err) {
       console.error("Failed to get user media:", err);
+    }
+  };
+
+  const switchCamera = async () => {
+    if (!streamed || screenSharing) return;
+    try {
+      const newFacing = facingMode === "user" ? "environment" : "user";
+      const newStream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+          frameRate: { ideal: 60, max: 100 },
+          facingMode: newFacing,
+        },
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
+      streamed.getTracks().forEach((track) => track.stop());
+      setStreamed(newStream);
+      setWebcamStream(newStream);
+      if (localVideoRef.current) localVideoRef.current.srcObject = newStream;
+      const videoTrack = newStream.getVideoTracks()[0];
+      if (peer) {
+        const sender = peer.getSenders().find((s) => s.track?.kind === "video");
+        if (sender) sender.replaceTrack(videoTrack);
+      }
+      setFacingMode(newFacing);
+    } catch (err) {
+      console.error("Camera switch failed:", err);
     }
   };
 
@@ -412,6 +448,14 @@ useEffect(() => {
           </button>
           <button onClick={toggleCamera} className={`px-3 py-1 rounded-lg hover:bg-gray-600 `}>
             {cameraOn ? <PiVideoCameraDuotone size={20} /> : <PiVideoCameraSlashDuotone size={20} />}
+          </button>
+          <button
+            onClick={switchCamera}
+            disabled={!cameraOn || screenSharing}
+            className="px-3 py-1 rounded-lg hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Switch camera (front/back)"
+          >
+            <MdCameraswitch size={20} />
           </button>
           <button onClick={toggleMic} className={`px-3 py-1 rounded-lg hover:bg-gray-600`}>
             {micOn ? <VscUnmute size={20} /> : <IoVolumeMute size={20} />}
