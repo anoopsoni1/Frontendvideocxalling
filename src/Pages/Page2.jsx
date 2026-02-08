@@ -33,6 +33,8 @@ function Page2() {
   const [isLocalBig, setIsLocalBig] = useState(true);
 
   const localVideoRef = useRef(null);
+  const localVideoMainRef = useRef(null); // big area when showing local
+  const localVideoSmallRef = useRef(null); // small draggable when showing local
   const remoteVideoRef = useRef(null);
   const streamedRef = useRef(null);
 
@@ -77,57 +79,80 @@ const [dragPos, setDragPos] = useState(initialDragPos);
       setStreamed(stream);
       setWebcamStream(stream);
       streamedRef.current = stream;
-      if (localVideoRef.current) localVideoRef.current.srcObject = stream;
+      setLocalVideoSrc(stream);
     } catch (err) {
       console.error("Failed to get user media:", err);
     }
   };
 
+  const setLocalVideoSrc = (stream) => {
+    [localVideoRef.current, localVideoMainRef.current, localVideoSmallRef.current].forEach((el) => {
+      if (el) el.srcObject = stream;
+    });
+  };
+
   const switchCamera = async () => {
     const currentStream = streamedRef.current || streamed;
     if (!currentStream || screenSharing) return;
-    const newFacing = facingMode === "user" ? "environment" : "user";
+    const videoTrack = currentStream.getVideoTracks()[0];
+    if (!videoTrack) return;
+    const currentDeviceId = videoTrack.getSettings().deviceId;
+    let devices = [];
     try {
-      // Stop current camera first so the other camera can be acquired (required on most devices)
+      devices = await navigator.mediaDevices.enumerateDevices();
+    } catch (e) {
+      console.error("enumerateDevices failed:", e);
+      return;
+    }
+    const videoInputs = devices.filter((d) => d.kind === "videoinput");
+    if (videoInputs.length < 2) {
+      console.warn("Only one camera available, cannot switch");
+      return;
+    }
+    const otherDevice = videoInputs.find((d) => d.deviceId && d.deviceId !== currentDeviceId);
+    const useFacingMode = !otherDevice?.deviceId;
+    try {
       currentStream.getTracks().forEach((track) => track.stop());
       streamedRef.current = null;
     } catch (e) {
       console.warn("Error stopping tracks:", e);
     }
+    await new Promise((r) => setTimeout(r, 150));
+    const newFacing = facingMode === "user" ? "environment" : "user";
     try {
+      const videoConstraints = useFacingMode
+        ? { facingMode: { exact: newFacing }, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 60, max: 100 } }
+        : {
+            deviceId: otherDevice?.deviceId ? { exact: otherDevice.deviceId } : undefined,
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+            frameRate: { ideal: 60, max: 100 },
+          };
       const newStream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
-          frameRate: { ideal: 60, max: 100 },
-          facingMode: { ideal: newFacing },
-        },
+        video: videoConstraints,
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
       streamedRef.current = newStream;
       setStreamed(newStream);
       setWebcamStream(newStream);
-      if (localVideoRef.current) {
-        localVideoRef.current.srcObject = newStream;
-      }
-      const videoTrack = newStream.getVideoTracks()[0];
+      setLocalVideoSrc(newStream);
+      const newVideoTrack = newStream.getVideoTracks()[0];
       if (peer) {
         const sender = peer.getSenders().find((s) => s.track?.kind === "video");
-        if (sender) sender.replaceTrack(videoTrack);
+        if (sender) sender.replaceTrack(newVideoTrack);
       }
-      setFacingMode(newFacing);
+      setFacingMode((prev) => (prev === "user" ? "environment" : "user"));
     } catch (err) {
       console.error("Camera switch failed:", err);
-      // Restore previous camera if switch failed (e.g. no back camera on desktop)
       try {
         const fallback = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 1920 }, height: { ideal: 1080 }, facingMode: { ideal: facingMode } },
+          video: { width: { ideal: 1920 }, height: { ideal: 1080 } },
           audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
         });
         streamedRef.current = fallback;
         setStreamed(fallback);
         setWebcamStream(fallback);
-        if (localVideoRef.current) localVideoRef.current.srcObject = fallback;
+        setLocalVideoSrc(fallback);
       } catch (e2) {
         console.error("Could not restore camera:", e2);
       }
@@ -439,8 +464,16 @@ useEffect(() => {
 
       <div className="flex-1 relative">
         {isLocalBig ? (
-          <video 
-          ref={localVideoRef} autoPlay muted playsInline className="absolute inset-0 w-full h-screen object-cover -scale-x-100" />
+          <video
+            ref={(el) => {
+              localVideoRef.current = el;
+              localVideoMainRef.current = el;
+            }}
+            autoPlay
+            muted
+            playsInline
+            className="absolute inset-0 w-full h-screen object-cover -scale-x-100"
+          />
         ) : (
           <video ref={remoteVideoRef} autoPlay playsInline className="absolute inset-0 w-full h-screen object-cover -scale-x-100" />
         )}
@@ -456,7 +489,16 @@ useEffect(() => {
           {isLocalBig ? (
             <video ref={remoteVideoRef} autoPlay playsInline className="w-full h-full object-cover -scale-x-100" />
           ) : (
-            <video ref={localVideoRef} autoPlay muted playsInline className="w-full h-full object-cover -scale-x-100" />
+            <video
+              ref={(el) => {
+                localVideoRef.current = el;
+                localVideoSmallRef.current = el;
+              }}
+              autoPlay
+              muted
+              playsInline
+              className="w-full h-full object-cover -scale-x-100"
+            />
           )}
         </div>
       </div>
